@@ -1,0 +1,12 @@
+cmake_minimum_required (VERSION 3.10)
+project (zpool_influxdb C)
+
+# By default, ZFSonLinux installs the necessary header files and libraries
+# in /usr/local. If this is not the case for your system, change INSTALL_DIR
+set(INSTALL_DIR /usr/local)
+
+include_directories(${INSTALL_DIR}/include/libspl ${INSTALL_DIR}/include/libzfs)
+link_directories(${INSTALL_DIR}/lib)
+add_executable(zpool_influxdb zpool_influxdb.c)
+target_link_libraries(zpool_influxdb zfs nvpair)
+install(TARGETS zpool_influxdb DESTINATION ${INSTALL_DIR}/bin)
