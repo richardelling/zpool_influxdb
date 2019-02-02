@@ -8,7 +8,7 @@
  * NOTE: libzfs is an unstable interface. YMMV.
  * For Linux compile with: gcc -lzfs -lnvpair zpool_influxdb.c -o zpool_influxdb
  *
- * Copyright 2018 Richard Elling
+ * Copyright 2018-2019 Richard Elling
  *
  * The MIT License (MIT)
  *
@@ -41,6 +41,7 @@
 
 #define POOL_MEASUREMENT        "zpool_stats"
 #define SCAN_MEASUREMENT        "zpool_scan_stats"
+#define VDEV_MEASUREMENT        "zpool_vdev_stats"
 
 /*
  * printf format for 64-bit unsigned int as influxdb line protocol
@@ -238,6 +239,56 @@ print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name,
 }
 
 /*
+ * top-level vdev stats are at the pool level
+ */
+int
+print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
+                              uint64_t ts) {
+	nvlist_t *nv_ex;
+	uint64_t value;
+
+	/* short_names become part of the metric name */
+	struct queue_lookup {
+	    char *name;
+	    char *short_name;
+	};
+	struct queue_lookup queue_type[] = {
+	    {ZPOOL_CONFIG_VDEV_SYNC_R_ACTIVE_QUEUE, "sync_r_active_queue"},
+	    {ZPOOL_CONFIG_VDEV_SYNC_W_ACTIVE_QUEUE, "sync_w_active_queue"},
+	    {ZPOOL_CONFIG_VDEV_ASYNC_R_ACTIVE_QUEUE, "async_r_active_queue"},
+	    {ZPOOL_CONFIG_VDEV_ASYNC_W_ACTIVE_QUEUE, "async_w_active_queue"},
+	    {ZPOOL_CONFIG_VDEV_SCRUB_ACTIVE_QUEUE, "async_scrub_active_queue"},
+	    {ZPOOL_CONFIG_VDEV_SYNC_R_PEND_QUEUE, "sync_r_pend_queue"},
+	    {ZPOOL_CONFIG_VDEV_SYNC_W_PEND_QUEUE, "sync_w_pend_queue"},
+	    {ZPOOL_CONFIG_VDEV_ASYNC_R_PEND_QUEUE, "async_r_pend_queue"},
+	    {ZPOOL_CONFIG_VDEV_ASYNC_W_PEND_QUEUE, "async_w_pend_queue"},
+	    {ZPOOL_CONFIG_VDEV_SCRUB_PEND_QUEUE, "async_scrub_pend_queue"},
+	    {NULL, NULL}
+	};
+
+	if (nvlist_lookup_nvlist(nvroot,
+	    ZPOOL_CONFIG_VDEV_STATS_EX, &nv_ex) != 0) {
+		return (6);
+	}
+
+	(void) printf("%s,name=%s,vdev=top ", VDEV_MEASUREMENT, pool_name);
+	for (int i = 0; queue_type[i].name; i++) {
+		if (nvlist_lookup_uint64(nv_ex,
+		    queue_type[i].name, (uint64_t *) &value) != 0) {
+			fprintf(stderr, "error: can't get %s\n",
+			    queue_type[i].name);
+			return (3);
+		}
+		if (i > 0)
+			printf(",");
+		printf("%s="IFMT, queue_type[i].short_name, value);
+	}
+
+	(void) printf(" %lu\n", ts);
+	return (0);
+}
+
+/*
  * call-back to print the stats from the pool config
  *
  * Note: if the pool is broken, this can hang indefinitely
@@ -284,6 +335,9 @@ print_stats(zpool_handle_t *zhp, void *data) {
 
 	if (err == 0)
 		err = print_scan_status(nvroot, pool_name, ts);
+
+	if (err == 0)
+		err = print_top_level_vdev_stats(nvroot, pool_name, ts);
 
 	free(pool_name);
 	return (0);

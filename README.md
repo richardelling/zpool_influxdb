@@ -21,6 +21,7 @@ The following measurements are collected:
 |---|---|---|
 | zpool_stats | general size and data | zpool list |
 | zpool_scan_stats | scrub, rebuild, and resilver statistics (omitted if no scan has been requested) | zpool status |
+| zpool_vdev_stats | per-vdev statistics | zpool iostat -q |
 
 ### zpool_stats Description
 zpool_stats contains top-level summary statistics for the pool.
@@ -78,6 +79,38 @@ cannot be reported by this collector.
 | paused_t | seconds | elapsed time while paused |
 | remaining_t | seconds | estimate of time remaining for scan |
 
+### zpool_vdev_stats Description
+The ZFS I/O (ZIO) scheduler uses five queues to schedule I/Os to each vdev.
+These queues are further divided into active and pending states.
+An I/O is pending prior to being issued to the vdev. An active
+I/O has been issued to the vdev. The scheduler and its tunable
+parameters are described at the 
+[ZFS on Linux wiki.](https://github.com/zfsonlinux/zfs/wiki/ZIO-Scheduler)
+The ZIO scheduler reports the queue depths as gauges where the value 
+represents an instantaneous snapshot of the queue depth at 
+the sample time. Therefore, it is not unusual to see all zeroes
+for an idle pool.
+
+#### zpool_vdev_stats Tags
+| label | description |
+|---|---|
+| name | pool name |
+| vdev | vdev name (top = entire pool) |
+
+#### zpool_vdev_stats Fields
+| field | units | description |
+|---|---|---|
+| sync_r_active_queue | entries | synchronous read active queue depth |
+| sync_w_active_queue | entries | synchronous write active queue depth |
+| async_r_active_queue | entries | asynchronous read active queue depth |
+| async_w_active_queue | entries | asynchronous write active queue depth |
+| async_scrub_active_queue | entries | asynchronous scrub active queue depth |
+| sync_r_pend_queue | entries | synchronous read pending queue depth |
+| sync_w_pend_queue | entries | synchronous write pending queue depth |
+| async_r_pend_queue | entries | asynchronous read pending queue depth |
+| async_w_pend_queue | entries | asynchronous write pending queue depth |
+| async_scrub_pend_queue | entries | asynchronous scrub pending queue depth |
+
 #### About unsigned integers
 Telegraf v1.6.2 and later support unsigned 64-bit integers which more 
 closely matches the uint64_t values used by ZFS. If you need to use
@@ -124,6 +157,14 @@ be restarted to read the config-directory files.
   * avoid frequent updates or short sample time
     intervals, because the locks can interfere with the performance
     of other instances of _zpool_ or _zpool_influxdb_
+
+## Other collectors
+There are a few other collectors for zpool statistics roaming around
+the Internet. Many attempt to screen-scrape `zpool` output in various 
+ways. The screen-scrape method works poorly for `zpool` output because
+of its human-friendly nature. Also, they suffer from the same caveats
+as this implementation. This implementation is optimized for directly
+collecting the metrics and is much more efficient than the screen-scrapers.
 
 ## Feedback Encouraged
 Pull requests and issues are greatly appreciated. Visit
