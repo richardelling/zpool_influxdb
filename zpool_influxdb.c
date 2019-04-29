@@ -347,7 +347,12 @@ print_stats(zpool_handle_t *zhp, void *data) {
 int
 main(int argc, char *argv[]) {
 	libzfs_handle_t *g_zfs;
-	g_zfs = libzfs_init();
+	if ((g_zfs = libzfs_init()) == NULL) {
+		fprintf(stderr,
+		    "error: cannot initialize libzfs. "
+		    "Is the zfs module loaded or zrepl running?");
+		exit(1);
+	}
 	if (argc > 1) {
 		return (zpool_iter(g_zfs, print_stats, argv[1]));
 	} else {

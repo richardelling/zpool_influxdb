@@ -1,4 +1,4 @@
-cmake_minimum_required (VERSION 3.10)
+cmake_minimum_required (VERSION 3.7)
 project (zpool_influxdb C)
 
 # By default, ZFSonLinux installs the necessary header files and libraries
