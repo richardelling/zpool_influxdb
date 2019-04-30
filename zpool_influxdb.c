@@ -44,10 +44,17 @@
 #define VDEV_MEASUREMENT        "zpool_vdev_stats"
 
 /*
- * printf format for 64-bit unsigned int as influxdb line protocol
- * prior to telegraf version 1.6.2, this needs to be "%lui"
+ * telegraf 1.6.4 can handle uint64, which is the native ZFS type.
+ * influxdb 1.x requires an option to enable uint64
+ * influxdb 2.x supports uint64
  */
+#ifdef SUPPORT_UINT64
 #define IFMT "%luu"
+#define MASK_UINT64(x) (x)
+#else
+#define IFMT "%lui"
+#define MASK_UINT64(x) ((x) & (-1UL >> 1))
+#endif
 
 /*
  * in cases where ZFS is installed, but not the ZFS dev environment, copy in
@@ -186,19 +193,19 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name, uint64_t ts) {
 	              "pct_done=%.2f,processed="IFMT",rate="IFMT","
 	              "remaining_t="IFMT",start_ts="IFMT","
 	              "to_examine="IFMT",to_process="IFMT" ",
-	    ps->pss_end_time,
-	    ps->pss_errors,
-	    examined,
-	    pass_exam,
-	    paused_ts,
-	    paused_time,
+	    MASK_UINT64(ps->pss_end_time),
+	    MASK_UINT64(ps->pss_errors),
+	    MASK_UINT64(examined),
+	    MASK_UINT64(pass_exam),
+	    MASK_UINT64(paused_ts),
+	    MASK_UINT64(paused_time),
 	    pct_done,
-	    ps->pss_processed,
-	    rate,
-	    remaining_time,
-	    ps->pss_start_time,
-	    ps->pss_to_examine,
-	    ps->pss_to_process
+	    MASK_UINT64(ps->pss_processed),
+	    MASK_UINT64(rate),
+	    MASK_UINT64(remaining_time),
+	    MASK_UINT64(ps->pss_start_time),
+	    MASK_UINT64(ps->pss_to_examine),
+	    MASK_UINT64(ps->pss_to_process)
 	);
 	(void) printf("%lu\n", ts);
 	return (0);
@@ -223,17 +230,17 @@ print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name,
 	              "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
 	              "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
 	              "checksum_errors="IFMT",fragmentation="IFMT"",
-	    vs->vs_alloc,
-	    vs->vs_space - vs->vs_alloc,
-	    vs->vs_space,
-	    vs->vs_bytes[ZIO_TYPE_READ],
-	    vs->vs_read_errors,
-	    vs->vs_ops[ZIO_TYPE_READ],
-	    vs->vs_bytes[ZIO_TYPE_WRITE],
-	    vs->vs_write_errors,
-	    vs->vs_ops[ZIO_TYPE_WRITE],
-	    vs->vs_checksum_errors,
-	    vs->vs_fragmentation);
+	    MASK_UINT64(vs->vs_alloc),
+	    MASK_UINT64(vs->vs_space - vs->vs_alloc),
+	    MASK_UINT64(vs->vs_space),
+	    MASK_UINT64(vs->vs_bytes[ZIO_TYPE_READ]),
+	    MASK_UINT64(vs->vs_read_errors),
+	    MASK_UINT64(vs->vs_ops[ZIO_TYPE_READ]),
+	    MASK_UINT64(vs->vs_bytes[ZIO_TYPE_WRITE]),
+	    MASK_UINT64(vs->vs_write_errors),
+	    MASK_UINT64(vs->vs_ops[ZIO_TYPE_WRITE]),
+	    MASK_UINT64(vs->vs_checksum_errors),
+	    MASK_UINT64(vs->vs_fragmentation));
 	(void) printf(" %lu\n", ts);
 	return (0);
 }
@@ -281,7 +288,7 @@ print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
 		}
 		if (i > 0)
 			printf(",");
-		printf("%s="IFMT, queue_type[i].short_name, value);
+		printf("%s="IFMT, queue_type[i].short_name, MASK_UINT64(value));
 	}
 
 	(void) printf(" %lu\n", ts);

@@ -113,8 +113,11 @@ for an idle pool.
 
 #### About unsigned integers
 Telegraf v1.6.2 and later support unsigned 64-bit integers which more 
-closely matches the uint64_t values used by ZFS. If you need to use
-older versions of telegraf, adjust the IFMT macro in _zpool_influxdb.c_
+closely matches the uint64_t values used by ZFS. By default, zpool_influxdb
+will mask ZFS' uint64_t values and use influxdb line protocol integer type.
+Eventually the monitoring world will catch up to the times and support 
+unsigned integers. To support unsigned, define SUPPORT_UINT64 and compile
+as described in `CMakeLists.txt`
 
 ## Building
 Building is simplified by using cmake.
