@@ -35,13 +35,18 @@
 #include <stdint.h>
 #include <sys/types.h>
 #include <sys/fs/zfs.h>
-#include <time.h>
 #include <libzfs.h>
 #include <string.h>
+#include <getopt.h>
 
 #define POOL_MEASUREMENT        "zpool_stats"
 #define SCAN_MEASUREMENT        "zpool_scan_stats"
 #define VDEV_MEASUREMENT        "zpool_vdev_stats"
+#define POOL_LATENCY_MEASUREMENT        "zpool_latency"
+#define POOL_QUEUE_MEASUREMENT  "zpool_vdev_queue"
+#define MIN_LAT_INDEX        10  /* minimum latency index 10 = 1024ns */
+#define POOL_IO_SIZE_MEASUREMENT        "zpool_io_size"
+#define MIN_SIZE_INDEX        9  /* minimum size index 9 = 512 bytes */
 
 /*
  * telegraf 1.6.4 can handle uint64, which is the native ZFS type.
@@ -55,6 +60,11 @@
 #define IFMT "%lui"
 #define MASK_UINT64(x) ((x) & (-1UL >> 1))
 #endif
+
+/* global options */
+int execd_mode = 0;
+int no_histograms = 0;
+uint64_t timestamp = 0;
 
 /*
  * in cases where ZFS is installed, but not the ZFS dev environment, copy in
@@ -110,7 +120,7 @@ escape_string(char *s) {
  * this output is suitable for long-term tracking in influxdb.
  */
 int
-print_scan_status(nvlist_t *nvroot, const char *pool_name, uint64_t ts) {
+print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 	uint_t c;
 	int64_t elapsed;
 	uint64_t examined, pass_exam, paused_time, paused_ts, rate;
@@ -119,7 +129,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name, uint64_t ts) {
 	double pct_done;
 	char *state[DSS_NUM_STATES] = {"none", "scanning", "finished",
 	                               "canceled"};
-	char *func = "unknown_function";
+	char *func;
 
 	(void) nvlist_lookup_uint64_array(nvroot,
 	    ZPOOL_CONFIG_SCAN_STATS,
@@ -207,7 +217,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name, uint64_t ts) {
 	    MASK_UINT64(ps->pss_to_examine),
 	    MASK_UINT64(ps->pss_to_process)
 	);
-	(void) printf("%lu\n", ts);
+	(void) printf("%lu\n", timestamp);
 	return (0);
 }
 
@@ -215,8 +225,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name, uint64_t ts) {
  * top-level summary stats are at the pool level
  */
 int
-print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name,
-                              uint64_t ts) {
+print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name) {
 	uint_t c;
 	vdev_stat_t *vs;
 
@@ -225,7 +234,7 @@ print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name,
 		return (1);
 	}
 	(void) printf("%s,name=%s,state=%s ", POOL_MEASUREMENT, pool_name,
-	    zpool_state_to_name(vs->vs_state, vs->vs_aux));
+	    zpool_state_to_name((vdev_state_t) vs->vs_state, (vdev_aux_t) vs->vs_aux));
 	(void) printf("alloc="IFMT",free="IFMT",size="IFMT","
 	              "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
 	              "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
@@ -241,16 +250,332 @@ print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name,
 	    MASK_UINT64(vs->vs_ops[ZIO_TYPE_WRITE]),
 	    MASK_UINT64(vs->vs_checksum_errors),
 	    MASK_UINT64(vs->vs_fragmentation));
-	(void) printf(" %lu\n", ts);
+	(void) printf(" %lu\n", timestamp);
 	return (0);
+}
+/*
+ * get a vdev name that corresponds to the top-level vdev names
+ * printed by `zpool status`
+ */
+char *
+get_vdev_name(nvlist_t *nvroot, const char *parent_name) {
+    static char vdev_name[256];
+    char *vdev_type = NULL;
+    uint64_t vdev_id = 0;
+
+    if (nvlist_lookup_string(nvroot, ZPOOL_CONFIG_TYPE,
+                             &vdev_type) != 0) {
+        vdev_type = "unknown";
+    }
+    if (nvlist_lookup_uint64(
+        nvroot, ZPOOL_CONFIG_ID, &vdev_id) != 0) {
+        vdev_id = UINT64_MAX;
+    }
+    if (parent_name == NULL) {
+        (void) snprintf(vdev_name, sizeof(vdev_name), "%s",
+                        vdev_type);
+    } else {
+        (void) snprintf(vdev_name, sizeof(vdev_name),
+                        "%s/%s-%lu",
+                        parent_name, vdev_type, vdev_id);
+    }
+    return (vdev_name);
+}
+
+/*
+ * get a string suitable for an influxdb tag that describes this vdev
+ *
+ * By default only the vdev hierarchical name is shown, separated by '/'
+ * If the vdev has an associated path, which is typical of leaf vdevs,
+ * then the path is added.
+ * It would be nice to have the devid instead of the path, but under
+ * Linux we cannot be sure a devid will exist and we'd rather have
+ * something than nothing, so we'll use path instead.
+ */
+char *
+get_vdev_desc(nvlist_t *nvroot, const char *parent_name) {
+    static char vdev_desc[256];
+    char *vdev_type = NULL;
+    uint64_t vdev_id = 0;
+    char vdev_value[256];
+    char *vdev_path = NULL;
+
+    if (nvlist_lookup_string(nvroot, ZPOOL_CONFIG_TYPE, &vdev_type) != 0) {
+        vdev_type = "unknown";
+    }
+    if (nvlist_lookup_uint64(nvroot, ZPOOL_CONFIG_ID, &vdev_id) != 0) {
+        vdev_id = UINT64_MAX;
+    }
+    if (nvlist_lookup_string(
+        nvroot, ZPOOL_CONFIG_PATH, &vdev_path) != 0) {
+        vdev_path = NULL;
+    }
+
+    if (parent_name == NULL) {
+        (void) snprintf(vdev_value, sizeof(vdev_value), "vdev=%s",
+                        escape_string(vdev_type));
+    } else {
+        (void) snprintf(vdev_value, sizeof(vdev_value),
+                        "vdev=%s/%s-%lu",
+                        escape_string((char *)parent_name),
+                        escape_string(vdev_type), vdev_id);
+    }
+    if (vdev_path == NULL) {
+        (void) snprintf(vdev_desc, sizeof(vdev_desc), "%s",
+                        vdev_value);
+    } else {
+        (void) snprintf(vdev_desc, sizeof(vdev_desc), "path=%s,%s",
+                        escape_string(vdev_path), vdev_value);
+    }
+    return (vdev_desc);
+}
+
+/*
+ * vdev latency stats are histograms stored as nvlist arrays of uint64.
+ * Latency stats include the ZIO scheduler classes plus lower-level
+ * vdev latencies.
+ *
+ * In many cases, the top-level "root" view obscures the underlying
+ * top-level vdev operations. For example, if a pool has a log, special,
+ * or cache device, then each can behave very differently. It is useful
+ * to see how each is responding.
+ */
+int
+print_vdev_latency_stats(nvlist_t *nvroot, const char *pool_name,
+                         const char *parent_name) {
+    uint_t c, end = 0;
+    nvlist_t *nv_ex;
+    char *vdev_desc = NULL;
+
+    /* short_names become part of the metric name and are influxdb-ready */
+    struct lat_lookup {
+        char *name;
+        char *short_name;
+        uint64_t sum;
+        uint64_t *array;
+    };
+    struct lat_lookup lat_type[] = {
+        {ZPOOL_CONFIG_VDEV_TOT_R_LAT_HISTO,   "total_read", 0},
+        {ZPOOL_CONFIG_VDEV_TOT_W_LAT_HISTO,   "total_write", 0},
+        {ZPOOL_CONFIG_VDEV_DISK_R_LAT_HISTO,  "disk_read", 0},
+        {ZPOOL_CONFIG_VDEV_DISK_W_LAT_HISTO,  "disk_write", 0},
+        {ZPOOL_CONFIG_VDEV_SYNC_R_LAT_HISTO,  "sync_read", 0},
+        {ZPOOL_CONFIG_VDEV_SYNC_W_LAT_HISTO,  "sync_write", 0},
+        {ZPOOL_CONFIG_VDEV_ASYNC_R_LAT_HISTO, "async_read", 0},
+        {ZPOOL_CONFIG_VDEV_ASYNC_W_LAT_HISTO, "async_write", 0},
+        {ZPOOL_CONFIG_VDEV_SCRUB_LAT_HISTO,   "scrub", 0},
+#ifdef ZPOOL_CONFIG_VDEV_TRIM_LAT_HISTO
+        {ZPOOL_CONFIG_VDEV_TRIM_LAT_HISTO,    "trim", 0},
+#endif
+        {NULL,                                NULL}
+    };
+
+    if (nvlist_lookup_nvlist(nvroot,
+                             ZPOOL_CONFIG_VDEV_STATS_EX, &nv_ex) != 0) {
+        return (6);
+    }
+
+    vdev_desc = get_vdev_desc(nvroot, parent_name);
+
+    for (int i = 0; lat_type[i].name; i++) {
+        if (nvlist_lookup_uint64_array(nv_ex,
+                                       lat_type[i].name,
+                                       &lat_type[i].array,
+                                       &c) != 0) {
+            fprintf(stderr, "error: can't get %s\n", lat_type[i].name);
+            return (3);
+        }
+        /* end count count, all of the arrays are the same size */
+        end = c - 1;
+    }
+
+    for (int bucket = 0; bucket <= end; bucket++) {
+        if (bucket < MIN_LAT_INDEX) {
+            /* don't print, but collect the sum */
+            for (int i = 0; lat_type[i].name; i++) {
+                lat_type[i].sum += lat_type[i].array[bucket];
+            }
+            continue;
+        }
+        if (bucket < end) {
+            printf("%s,le=%0.6f,name=%s,%s ",
+                POOL_LATENCY_MEASUREMENT,
+                (float) (1ULL << bucket) * 1e-9,
+                escape_string((char *)pool_name),
+                vdev_desc);
+        } else {
+            printf("%s,le=+Inf,name=%s,%s ",
+                         POOL_LATENCY_MEASUREMENT,
+                         escape_string((char *)pool_name),
+                         vdev_desc);
+        }
+        for (int i = 0; lat_type[i].name; i++) {
+            lat_type[i].sum += lat_type[i].array[bucket];
+            printf("%s="IFMT, lat_type[i].short_name, lat_type[i].sum);
+            if (lat_type[i + 1].name != NULL) {
+                printf(",");
+            }
+        }
+        printf(" %lu\n", timestamp);
+    }
+    return (0);
+}
+
+/*
+ * vdev request size stats are histograms stored as nvlist arrays of uint64.
+ * Request size stats include the ZIO scheduler classes plus lower-level
+ * vdev sizes. Both independent (ind) and aggregated (agg) sizes are reported.
+ *
+ * In many cases, the top-level "root" view obscures the underlying
+ * top-level vdev operations. For example, if a pool has a log, special,
+ * or cache device, then each can behave very differently. It is useful
+ * to see how each is responding.
+ */
+int
+print_vdev_size_stats(nvlist_t *nvroot, const char *pool_name,
+                      const char *parent_name) {
+    uint_t c, end = 0;
+    nvlist_t *nv_ex;
+    char *vdev_desc = NULL;
+
+    /* short_names become part of the metric name */
+    struct size_lookup {
+        char *name;
+        char *short_name;
+        uint64_t sum;
+        uint64_t *array;
+    };
+    struct size_lookup size_type[] = {
+        {ZPOOL_CONFIG_VDEV_SYNC_IND_R_HISTO,   "sync_read_ind"},
+        {ZPOOL_CONFIG_VDEV_SYNC_IND_W_HISTO,   "sync_write_ind"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_IND_R_HISTO,  "async_read_ind"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_IND_W_HISTO,  "async_write_ind"},
+        {ZPOOL_CONFIG_VDEV_IND_SCRUB_HISTO,    "scrub_read_ind"},
+        {ZPOOL_CONFIG_VDEV_SYNC_AGG_R_HISTO,   "sync_read_agg"},
+        {ZPOOL_CONFIG_VDEV_SYNC_AGG_W_HISTO,   "sync_write_agg"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_AGG_R_HISTO,  "async_read_agg"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_AGG_W_HISTO,  "async_write_agg"},
+        {ZPOOL_CONFIG_VDEV_AGG_SCRUB_HISTO,    "scrub_read_agg"},
+#ifdef ZPOOL_CONFIG_VDEV_IND_TRIM_HISTO
+        {ZPOOL_CONFIG_VDEV_IND_TRIM_HISTO,    "trim_write_ind"},
+            {ZPOOL_CONFIG_VDEV_AGG_TRIM_HISTO,    "trim_write_agg"},
+#endif
+        {NULL,                                NULL}
+    };
+
+    if (nvlist_lookup_nvlist(nvroot,
+                             ZPOOL_CONFIG_VDEV_STATS_EX, &nv_ex) != 0) {
+        return (6);
+    }
+
+    vdev_desc = get_vdev_desc(nvroot, parent_name);
+
+    for (int i = 0; size_type[i].name; i++) {
+        if (nvlist_lookup_uint64_array(nv_ex,
+                                       size_type[i].name,
+                                       &size_type[i].array,
+                                       &c) != 0) {
+            fprintf(stderr, "error: can't get %s\n", size_type[i].name);
+            return (3);
+        }
+        /* end count count, all of the arrays are the same size */
+        end = c - 1;
+    }
+
+   for (int bucket = 0; bucket <= end; bucket++) {
+       if (bucket < MIN_SIZE_INDEX) {
+           /* don't print, but collect the sum */
+           for (int i = 0; size_type[i].name; i++) {
+               size_type[i].sum += size_type[i].array[bucket];
+           }
+           continue;
+       }
+
+       if (bucket < end) {
+            printf("%s,le=%llu,name=%s,%s ",
+                   POOL_IO_SIZE_MEASUREMENT,
+                   1ULL << bucket,
+                   escape_string((char *)pool_name),
+                   vdev_desc);
+       } else {
+           printf("%s,le=+Inf,name=%s,%s ",
+                  POOL_IO_SIZE_MEASUREMENT,
+                  escape_string((char *)pool_name),
+                  vdev_desc);
+       }
+       for (int i = 0; size_type[i].name; i++) {
+           size_type[i].sum += size_type[i].array[bucket];
+           printf("%s="IFMT, size_type[i].short_name, size_type[i].sum);
+           if (size_type[i + 1].name != NULL) {
+               printf(",");
+           }
+       }
+       printf(" %lu\n", timestamp);
+    }
+    return (0);
+}
+
+/*
+ * ZIO scheduler queue stats are stored as gauges. This is unfortunate
+ * because the values can change very rapidly and any point-in-time
+ * value will quickly be obsoleted. It is also not easy to downsample.
+ * Thus only the top-level queue stats might be beneficial... maybe.
+ */
+int
+print_queue_stats(nvlist_t *nvroot, const char *pool_name,
+                  const char *parent_name) {
+    nvlist_t *nv_ex;
+    uint64_t value;
+
+    /* short_names become part of the metric name */
+    struct queue_lookup {
+        char *name;
+        char *short_name;
+    };
+    struct queue_lookup queue_type[] = {
+        {ZPOOL_CONFIG_VDEV_SYNC_R_ACTIVE_QUEUE,  "sync_r_active"},
+        {ZPOOL_CONFIG_VDEV_SYNC_W_ACTIVE_QUEUE,  "sync_w_active"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_R_ACTIVE_QUEUE, "async_r_active"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_W_ACTIVE_QUEUE, "async_w_active"},
+        {ZPOOL_CONFIG_VDEV_SCRUB_ACTIVE_QUEUE,  "async_scrub_active"},
+        {ZPOOL_CONFIG_VDEV_SYNC_R_PEND_QUEUE,    "sync_r_pend"},
+        {ZPOOL_CONFIG_VDEV_SYNC_W_PEND_QUEUE,    "sync_w_pend"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_R_PEND_QUEUE,   "async_r_pend"},
+        {ZPOOL_CONFIG_VDEV_ASYNC_W_PEND_QUEUE,   "async_w_pend"},
+        {ZPOOL_CONFIG_VDEV_SCRUB_PEND_QUEUE,     "async_scrub_pend"},
+        {NULL,                                   NULL}
+    };
+
+    if (nvlist_lookup_nvlist(nvroot,
+                             ZPOOL_CONFIG_VDEV_STATS_EX, &nv_ex) != 0) {
+        return (6);
+    }
+
+    printf("%s,name=%s,%s ",
+           POOL_QUEUE_MEASUREMENT,
+           escape_string((char *)pool_name),
+           get_vdev_desc(nvroot, parent_name));
+    for (int i = 0; queue_type[i].name; i++) {
+        if (nvlist_lookup_uint64(nv_ex,
+                                 queue_type[i].name, &value) != 0) {
+            fprintf(stderr, "error: can't get %s\n",
+                    queue_type[i].name);
+            return (3);
+        }
+        printf("%s="IFMT, queue_type[i].short_name, value);
+        if (queue_type[i + 1].name != NULL) {
+            printf(",");
+        }
+    }
+    printf(" %lu\n", timestamp);
+    return (0);
 }
 
 /*
  * top-level vdev stats are at the pool level
  */
 int
-print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
-                              uint64_t ts) {
+print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name) {
 	nvlist_t *nv_ex;
 	uint64_t value;
 
@@ -281,7 +606,7 @@ print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
 	(void) printf("%s,name=%s,vdev=top ", VDEV_MEASUREMENT, pool_name);
 	for (int i = 0; queue_type[i].name; i++) {
 		if (nvlist_lookup_uint64(nv_ex,
-		    queue_type[i].name, (uint64_t *) &value) != 0) {
+                                 queue_type[i].name, &value) != 0) {
 			fprintf(stderr, "error: can't get %s\n",
 			    queue_type[i].name);
 			return (3);
@@ -291,8 +616,40 @@ print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
 		printf("%s="IFMT, queue_type[i].short_name, MASK_UINT64(value));
 	}
 
-	(void) printf(" %lu\n", ts);
+	(void) printf(" %lu\n", timestamp);
 	return (0);
+}
+
+/*
+ * recursive stats printer
+ */
+typedef int (*stat_printer_f)(nvlist_t *, const char *, const char *);
+
+int
+print_recursive_stats(stat_printer_f func, nvlist_t *nvroot,
+                      const char *pool_name, const char *parent_name,
+                      int descend) {
+    uint_t c, children;
+    nvlist_t **child;
+    char vdev_name[256];
+    int err;
+
+    err = func(nvroot, pool_name, parent_name);
+    if (err)
+        return (err);
+
+    if (descend && nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN,
+                                              &child, &children) == 0) {
+        (void) strncpy(vdev_name, get_vdev_name(nvroot, parent_name),
+                       sizeof(vdev_name));
+        vdev_name[sizeof(vdev_name) - 1] = '\0';
+
+        for (c = 0; c < children; c++) {
+            print_recursive_stats(func, child[c], pool_name,
+                                  vdev_name, descend);
+        }
+    }
+    return (0);
 }
 
 /*
@@ -302,15 +659,13 @@ print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name,
  */
 int
 print_stats(zpool_handle_t *zhp, void *data) {
-	uint_t c, err;
+	uint_t c;
+	int err;
 	boolean_t missing;
-	nvlist_t *nv, *nv_ex, *config, *nvroot;
+	nvlist_t *config, *nvroot;
 	vdev_stat_t *vs;
-	uint64_t *lat_array;
-	uint64_t ts;
 	struct timespec tv;
 	char *pool_name;
-	pool_scan_stat_t *ps = NULL;
 
 	/* if not this pool return quickly */
 	if (data &&
@@ -322,9 +677,9 @@ print_stats(zpool_handle_t *zhp, void *data) {
 
 	config = zpool_get_config(zhp, NULL);
 	if (clock_gettime(CLOCK_REALTIME, &tv) != 0)
-		ts = (uint64_t) time(NULL) * 1000000000;
+		timestamp = (uint64_t) time(NULL) * 1000000000;
 	else
-		ts =
+		timestamp =
 		    ((uint64_t) tv.tv_sec * 1000000000) + (uint64_t) tv.tv_nsec;
 
 	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE, &nvroot) !=
@@ -338,32 +693,76 @@ print_stats(zpool_handle_t *zhp, void *data) {
 	}
 
 	pool_name = escape_string(zhp->zpool_name);
-	err = print_top_level_summary_stats(nvroot, pool_name, ts);
+	err = print_top_level_summary_stats(nvroot, pool_name);
+
+	/* if any of these return an error, skip the rest */
+	if (err == 0)
+		err = print_scan_status(nvroot, pool_name);
 
 	if (err == 0)
-		err = print_scan_status(nvroot, pool_name, ts);
+        err = print_top_level_vdev_stats(nvroot, pool_name);
 
-	if (err == 0)
-		err = print_top_level_vdev_stats(nvroot, pool_name, ts);
-
+	if (no_histograms == 0) {
+        if (err == 0)
+            err = print_recursive_stats(print_vdev_latency_stats, nvroot,
+                                        pool_name, NULL, 1);
+        if (err == 0)
+            err = print_recursive_stats(print_vdev_size_stats, nvroot,
+                                        pool_name, NULL, 1);
+        if (err == 0)
+            err = print_recursive_stats(print_queue_stats, nvroot,
+                                        pool_name, NULL, 0);
+    }
 	free(pool_name);
-	return (0);
+	return (err);
 }
 
 
+void
+usage(char* name) {
+    fprintf(stderr, "usage: %s [--execd][--no-histograms] [poolname]\n", name);
+    exit(EXIT_FAILURE);
+}
+
 int
 main(int argc, char *argv[]) {
+    int opt;
+    int ret = 8;
+    char *line = NULL;
+    size_t len = 0;
+    struct option long_options[] = {
+        {"execd", no_argument, NULL, 'e'},
+        {"help", no_argument, NULL, 'h'},
+        {"no-histograms", no_argument, NULL, 'n'},
+        {0, 0, 0, 0}
+    };
+    while ((opt = getopt_long(argc, argv, "ehn", long_options, NULL)) != -1) {
+        switch (opt) {
+            case 'e':
+                execd_mode = 1;
+                break;
+            case 'n':
+                no_histograms = 1;
+                break;
+            default:
+                usage(argv[0]);
+        }
+    }
+
 	libzfs_handle_t *g_zfs;
 	if ((g_zfs = libzfs_init()) == NULL) {
 		fprintf(stderr,
 		    "error: cannot initialize libzfs. "
 		    "Is the zfs module loaded or zrepl running?");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
-	if (argc > 1) {
-		return (zpool_iter(g_zfs, print_stats, argv[1]));
-	} else {
-		return (zpool_iter(g_zfs, print_stats, NULL));
+	if (execd_mode == 0) {
+        ret = zpool_iter(g_zfs, print_stats, argv[optind]);
+        return (ret);
+    }
+    while (getline(&line, &len, stdin) != -1) {
+        ret = zpool_iter(g_zfs, print_stats, argv[optind]);
 	}
+    return(ret);
 }
 
