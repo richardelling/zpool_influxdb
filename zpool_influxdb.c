@@ -1,14 +1,24 @@
 /*
  * Gather top-level ZFS pool and resilver/scan statistics and print using
  * influxdb line protocol
- * usage: [pool_name]
+ * usage: [options] [pool_name]
+ * where options are:
+ *   --execd, -e           run in telegraf execd input plugin mode, [CR] on
+ *                         stdin causes a sample to be printed and wait for
+ *                         the next [CR]
+ *   --no-histograms, -n   don't print histogram data (reduces cardinality
+ *                         if you don't care about histograms)
+ *   --sum-histogram-buckets, -s sum histogram bucket values
  *
- * To integrate into telegraf, use the inputs.exec plugin
+ * To integrate into telegraf use one of:
+ * 1. the `inputs.execd` plugin with the `--execd` option
+ * 2. the `inputs.exec` plugin to simply run with no options
  *
  * NOTE: libzfs is an unstable interface. YMMV.
- * For Linux compile with: gcc -lzfs -lnvpair zpool_influxdb.c -o zpool_influxdb
+ * For Linux compile with:
+ *    cmake . && make && make install
  *
- * Copyright 2018-2019 Richard Elling
+ * Copyright 2018-2020 Richard Elling
  *
  * The MIT License (MIT)
  *
@@ -58,12 +68,13 @@
 #define MASK_UINT64(x) (x)
 #else
 #define IFMT "%lui"
-#define MASK_UINT64(x) ((x) & (-1UL >> 1))
+#define MASK_UINT64(x) ((x) & INT64_MAX)
 #endif
 
 /* global options */
 int execd_mode = 0;
 int no_histograms = 0;
+int sum_histogram_buckets = 0;
 uint64_t timestamp = 0;
 
 /*
@@ -93,7 +104,7 @@ struct zpool_handle {
 char *
 escape_string(char *s) {
 	char *c, *d;
-	char *t = (char *) malloc(ZFS_MAX_DATASET_NAME_LEN << 1);
+	char *t = (char *) malloc(ZFS_MAX_DATASET_NAME_LEN * 2);
 	if (t == NULL) {
 		fprintf(stderr, "error: cannot allocate memory\n");
 		exit(1);
@@ -299,6 +310,7 @@ get_vdev_desc(nvlist_t *nvroot, const char *parent_name) {
     uint64_t vdev_id = 0;
     char vdev_value[256];
     char *vdev_path = NULL;
+    char *s, *t;
 
     if (nvlist_lookup_string(nvroot, ZPOOL_CONFIG_TYPE, &vdev_type) != 0) {
         vdev_type = "unknown";
@@ -312,20 +324,25 @@ get_vdev_desc(nvlist_t *nvroot, const char *parent_name) {
     }
 
     if (parent_name == NULL) {
-        (void) snprintf(vdev_value, sizeof(vdev_value), "vdev=%s",
-                        escape_string(vdev_type));
+        s = escape_string(vdev_type);
+        (void) snprintf(vdev_value, sizeof(vdev_value), "vdev=%s", s);
+        free(s);
     } else {
+        s = escape_string((char *)parent_name);
+        t = escape_string(vdev_type);
         (void) snprintf(vdev_value, sizeof(vdev_value),
-                        "vdev=%s/%s-%lu",
-                        escape_string((char *)parent_name),
-                        escape_string(vdev_type), vdev_id);
+                        "vdev=%s/%s-%lu", s, t, vdev_id);
+        free(s);
+        free(t);
     }
     if (vdev_path == NULL) {
         (void) snprintf(vdev_desc, sizeof(vdev_desc), "%s",
                         vdev_value);
     } else {
+        s = escape_string(vdev_path);
         (void) snprintf(vdev_desc, sizeof(vdev_desc), "path=%s,%s",
-                        escape_string(vdev_path), vdev_value);
+                        s, vdev_value);
+        free(s);
     }
     return (vdev_desc);
 }
@@ -399,18 +416,18 @@ print_vdev_latency_stats(nvlist_t *nvroot, const char *pool_name,
         }
         if (bucket < end) {
             printf("%s,le=%0.6f,name=%s,%s ",
-                POOL_LATENCY_MEASUREMENT,
-                (float) (1ULL << bucket) * 1e-9,
-                escape_string((char *)pool_name),
-                vdev_desc);
+                POOL_LATENCY_MEASUREMENT, (float) (1ULL << bucket) * 1e-9,
+                pool_name, vdev_desc);
         } else {
             printf("%s,le=+Inf,name=%s,%s ",
-                         POOL_LATENCY_MEASUREMENT,
-                         escape_string((char *)pool_name),
-                         vdev_desc);
+                         POOL_LATENCY_MEASUREMENT, pool_name, vdev_desc);
         }
         for (int i = 0; lat_type[i].name; i++) {
-            lat_type[i].sum += lat_type[i].array[bucket];
+            if (bucket <= MIN_LAT_INDEX || sum_histogram_buckets) {
+                lat_type[i].sum += lat_type[i].array[bucket];
+            } else {
+                lat_type[i].sum = lat_type[i].array[bucket];
+            }
             printf("%s="IFMT, lat_type[i].short_name, lat_type[i].sum);
             if (lat_type[i + 1].name != NULL) {
                 printf(",");
@@ -438,7 +455,7 @@ print_vdev_size_stats(nvlist_t *nvroot, const char *pool_name,
     nvlist_t *nv_ex;
     char *vdev_desc = NULL;
 
-    /* short_names become part of the metric name */
+    /* short_names become the field name */
     struct size_lookup {
         char *name;
         char *short_name;
@@ -493,18 +510,18 @@ print_vdev_size_stats(nvlist_t *nvroot, const char *pool_name,
 
        if (bucket < end) {
             printf("%s,le=%llu,name=%s,%s ",
-                   POOL_IO_SIZE_MEASUREMENT,
-                   1ULL << bucket,
-                   escape_string((char *)pool_name),
-                   vdev_desc);
+                   POOL_IO_SIZE_MEASUREMENT, 1ULL << bucket,
+                   pool_name, vdev_desc);
        } else {
            printf("%s,le=+Inf,name=%s,%s ",
-                  POOL_IO_SIZE_MEASUREMENT,
-                  escape_string((char *)pool_name),
-                  vdev_desc);
+                  POOL_IO_SIZE_MEASUREMENT, pool_name, vdev_desc);
        }
        for (int i = 0; size_type[i].name; i++) {
-           size_type[i].sum += size_type[i].array[bucket];
+           if (bucket <= MIN_SIZE_INDEX || sum_histogram_buckets) {
+               size_type[i].sum += size_type[i].array[bucket];
+           } else {
+               size_type[i].sum = size_type[i].array[bucket];
+           }
            printf("%s="IFMT, size_type[i].short_name, size_type[i].sum);
            if (size_type[i + 1].name != NULL) {
                printf(",");
@@ -527,7 +544,7 @@ print_queue_stats(nvlist_t *nvroot, const char *pool_name,
     nvlist_t *nv_ex;
     uint64_t value;
 
-    /* short_names become part of the metric name */
+    /* short_names are used for the field name */
     struct queue_lookup {
         char *name;
         char *short_name;
@@ -552,8 +569,7 @@ print_queue_stats(nvlist_t *nvroot, const char *pool_name,
     }
 
     printf("%s,name=%s,%s ",
-           POOL_QUEUE_MEASUREMENT,
-           escape_string((char *)pool_name),
+           POOL_QUEUE_MEASUREMENT, pool_name,
            get_vdev_desc(nvroot, parent_name));
     for (int i = 0; queue_type[i].name; i++) {
         if (nvlist_lookup_uint64(nv_ex,
@@ -603,7 +619,7 @@ print_top_level_vdev_stats(nvlist_t *nvroot, const char *pool_name) {
 		return (6);
 	}
 
-	(void) printf("%s,name=%s,vdev=top ", VDEV_MEASUREMENT, pool_name);
+	(void) printf("%s,name=%s,vdev=root ", VDEV_MEASUREMENT, pool_name);
 	for (int i = 0; queue_type[i].name; i++) {
 		if (nvlist_lookup_uint64(nv_ex,
                                  queue_type[i].name, &value) != 0) {
@@ -669,11 +685,15 @@ print_stats(zpool_handle_t *zhp, void *data) {
 
 	/* if not this pool return quickly */
 	if (data &&
-	    strncmp(data, zhp->zpool_name, ZFS_MAX_DATASET_NAME_LEN) != 0)
-		return (0);
+	    strncmp(data, zhp->zpool_name, ZFS_MAX_DATASET_NAME_LEN) != 0) {
+        zpool_close(zhp);
+        return (0);
+    }
 
-	if (zpool_refresh_stats(zhp, &missing) != 0)
-		return (1);
+	if (zpool_refresh_stats(zhp, &missing) != 0) {
+        zpool_close(zhp);
+        return (1);
+    }
 
 	config = zpool_get_config(zhp, NULL);
 	if (clock_gettime(CLOCK_REALTIME, &tv) != 0)
@@ -682,13 +702,13 @@ print_stats(zpool_handle_t *zhp, void *data) {
 		timestamp =
 		    ((uint64_t) tv.tv_sec * 1000000000) + (uint64_t) tv.tv_nsec;
 
-	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE, &nvroot) !=
-	    0) {
+	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE, &nvroot) != 0) {
+        zpool_close(zhp);
 		return (2);
 	}
-	if (nvlist_lookup_uint64_array(nvroot,
-	    ZPOOL_CONFIG_VDEV_STATS,
-	    (uint64_t **) &vs, &c) != 0) {
+	if (nvlist_lookup_uint64_array(nvroot, ZPOOL_CONFIG_VDEV_STATS,
+	        (uint64_t **) &vs, &c) != 0) {
+        zpool_close(zhp);
 		return (3);
 	}
 
@@ -714,6 +734,7 @@ print_stats(zpool_handle_t *zhp, void *data) {
                                         pool_name, NULL, 0);
     }
 	free(pool_name);
+    zpool_close(zhp);
 	return (err);
 }
 
@@ -734,15 +755,19 @@ main(int argc, char *argv[]) {
         {"execd", no_argument, NULL, 'e'},
         {"help", no_argument, NULL, 'h'},
         {"no-histograms", no_argument, NULL, 'n'},
+        {"sum-histogram-buckets", no_argument, NULL, 's'},
         {0, 0, 0, 0}
     };
-    while ((opt = getopt_long(argc, argv, "ehn", long_options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "ehns", long_options, NULL)) != -1) {
         switch (opt) {
             case 'e':
                 execd_mode = 1;
                 break;
             case 'n':
                 no_histograms = 1;
+                break;
+            case 's':
+                sum_histogram_buckets = 1;
                 break;
             default:
                 usage(argv[0]);
@@ -763,6 +788,6 @@ main(int argc, char *argv[]) {
     while (getline(&line, &len, stdin) != -1) {
         ret = zpool_iter(g_zfs, print_stats, argv[optind]);
 	}
-    return(ret);
+    return (ret);
 }
 
