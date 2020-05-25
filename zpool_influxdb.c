@@ -18,6 +18,15 @@
  * For Linux compile with:
  *    cmake . && make && make install
  *
+ * The design goals of this software include:
+ * + be as lightweight as possible
+ * + reduce the number of external dependencies as far as possible, hence
+ *   there is no dependency on a client library for managing the metric
+ *   collection -- info is printed, KISS
+ * + broken pools or kernel bugs can cause this process to hang in an
+ *   unkillable state. For this reason, it is best to keep the damage limited
+ *   to a small process like zpool_influxdb rather than a larger collector.
+ *
  * Copyright 2018-2020 Richard Elling
  *
  * The MIT License (MIT)
@@ -59,7 +68,13 @@
 #define MIN_SIZE_INDEX        9  /* minimum size index 9 = 512 bytes */
 
 /*
- * telegraf 1.6.4 can handle uint64, which is the native ZFS type.
+ * telegraf 1.6.4 can handle uint64, which is the native ZFS type
+ * telegraf also handles the input of uint64 and will convert to match
+ * influxdb via the outputs.influxdb plugin. This is the easiest method
+ * for future compatibility. If is it not possible to use telegraf as a
+ * metrics broker and unsigned 64-bit is not possible, then consider
+ * defining SUPPORT_UINT64 in the CMakeLists.txt or Makefile.
+ *
  * influxdb 1.x requires an option to enable uint64
  * influxdb 2.x supports uint64
  */
@@ -129,6 +144,7 @@ escape_string(char *s) {
  * print_scan_status() prints the details as often seen in the "zpool status"
  * output. However, unlike the zpool command, which is intended for humans,
  * this output is suitable for long-term tracking in influxdb.
+ * TODO: update to include issued scan data
  */
 int
 print_scan_status(nvlist_t *nvroot, const char *pool_name) {
@@ -180,7 +196,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 
 #ifdef EZFS_SCRUB_PAUSED
 	paused_ts = ps->pss_pass_scrub_pause;
-			paused_time = ps->pss_pass_scrub_spent_paused;
+	paused_time = ps->pss_pass_scrub_spent_paused;
 #else
 	paused_ts = 0;
 	paused_time = 0;
@@ -245,7 +261,8 @@ print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name) {
 		return (1);
 	}
 	(void) printf("%s,name=%s,state=%s ", POOL_MEASUREMENT, pool_name,
-	    zpool_state_to_name((vdev_state_t) vs->vs_state, (vdev_aux_t) vs->vs_aux));
+	    zpool_state_to_name((vdev_state_t) vs->vs_state,
+	            (vdev_aux_t) vs->vs_aux));
 	(void) printf("alloc="IFMT",free="IFMT",size="IFMT","
 	              "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
 	              "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
@@ -671,7 +688,8 @@ print_recursive_stats(stat_printer_f func, nvlist_t *nvroot,
 /*
  * call-back to print the stats from the pool config
  *
- * Note: if the pool is broken, this can hang indefinitely
+ * Note: if the pool is broken, this can hang indefinitely and perhaps in an
+ * unkillable state.
  */
 int
 print_stats(zpool_handle_t *zhp, void *data) {
