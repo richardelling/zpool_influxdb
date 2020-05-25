@@ -232,8 +232,9 @@ Building is simplified by using cmake.
 It is as simple as possible, but no simpler.
 By default, [ZFSonLinux](https://github.com/zfsonlinux/zfs) 
 installs the necessary header and library files in _/usr/local_.
-If you place those files elsewhere, then edit _CMakeLists.txt_ and
-change the _INSTALL_DIR_
+If you place those files elsewhere, either edit _CMakeLists.txt_ and
+change the _ZFS_INSTALL_BASE_ or pass it with `-D ZFS_INSTALL_BASE=/usr`
+on the cmake command line:
 ```bash
 cmake .
 make
