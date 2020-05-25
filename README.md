@@ -4,15 +4,47 @@ The _zpool_influxdb_ program produces
 compatible metrics from zpools. In the UNIX tradition, _zpool_influxdb_
 does one thing: read statistics from a pool and print them to
 stdout. In many ways, this is a metrics-friendly output of 
-statistics normally observed via the _zpool_ command.
+statistics normally observed via the `zpool` command.
 
 ## ZFS Versions
 There are many implementations of ZFS on many OSes. The current
 version is tested to work on:
 * [ZFSonLinux](https://github.com/zfsonlinux/zfs) version 0.7 and later
+* [cstor](https://github.com/openebs/cstor) for userland ZFS (uZFS)
 
 This should compile and run on other ZFS versions, though many 
 do not have the latency histograms. Pull requests are welcome.
+
+## Usage
+When run without arguments, _zpool_influxdb_ runs once, reading data
+from all imported pools, and prints to stdout.
+```shell
+zpool_influxdb [options] [poolname]
+```
+If no poolname is specified, then all pools are sampled.
+
+| option | short option | description |
+|---|---|---|
+| --execd | -e | For use with telegraf's `execd` plugin. When [enter] is pressed, the pools are sampled. To exit, use [ctrl+D] |
+| --no-histogram | -n | Do not print histogram information |
+| --sum-histogram-buckets | -s | Sum histogram bucket values |
+| --help | -h | Print a short usage message |
+
+#### Histogram Bucket Values
+The histogram data collected by ZFS is stored as independent bucket values.
+This works well out-of-the-box with an influxdb data source and grafana's
+heatmap visualization. The influxdb query for a grafana heatmap 
+visualization looks like:
+```
+field(disk_read) last() non_negative_derivative(1s)
+```
+
+Another method for storing histogram data sums the values for lower-value
+buckets. For example, a latency bucket tagged "le=10" includes the values
+in the bucket "le=1".
+This method is often used for prometheus histograms.
+The `zpool_influxdb --sum-histogram-buckets` option presents the data from ZFS
+as summed values.
 
 ## Measurements
 The following measurements are collected:
@@ -22,6 +54,9 @@ The following measurements are collected:
 | zpool_stats | general size and data | zpool list |
 | zpool_scan_stats | scrub, rebuild, and resilver statistics (omitted if no scan has been requested) | zpool status |
 | zpool_vdev_stats | per-vdev statistics | zpool iostat -q |
+| zpool_io_size | per-vdev I/O size histogram | zpool iostat -r |
+| zpool_latency | per-vdev I/O latency histogram | zpool iostat -w |
+| zpool_vdev_queue | per-vdev instantaneous queue depth | zpool iostat -q |
 
 ### zpool_stats Description
 zpool_stats contains top-level summary statistics for the pool.
@@ -95,7 +130,7 @@ for an idle pool.
 | label | description |
 |---|---|
 | name | pool name |
-| vdev | vdev name (top = entire pool) |
+| vdev | vdev name (root = entire pool) |
 
 #### zpool_vdev_stats Fields
 | field | units | description |
@@ -110,6 +145,79 @@ for an idle pool.
 | async_r_pend_queue | entries | asynchronous read pending queue depth |
 | async_w_pend_queue | entries | asynchronous write pending queue depth |
 | async_scrub_pend_queue | entries | asynchronous scrub pending queue depth |
+
+### zpool_latency Histogram
+ZFS tracks the latency of each I/O in the ZIO pipeline. This latency can
+be useful for observing latency-related issues that are not easily observed
+using the averaged latency statistics.
+
+The histogram fields show cumulative values from lowest to highest.
+The largest bucket is tagged "le=+Inf", representing the total count
+of I/Os by type and vdev.
+
+#### zpool_latency Histogram Tags
+| label | description |
+|---|---|
+| le | bucket for histogram, latency is less than or equal to bucket value in seconds |
+| name | pool name |
+| path | for leaf vdevs, the device path name, otherwise omitted |
+| vdev | vdev name (root = entire pool) |
+
+#### zpool_latency Histogram Fields
+| field | units | description |
+|---|---|---|
+| total_read | operations | read operations of all types |
+| total_write | operations | write operations of all types |
+| disk_read | operations | disk read operations |
+| disk_write | operations | disk write operations |
+| sync_read | operations | ZIO sync reads |
+| sync_write | operations | ZIO sync writes |
+| async_read | operations | ZIO async reads|
+| async_write | operations | ZIO async writes |
+| scrub | operations | ZIO scrub/scan reads |
+| trim | operations | ZIO trim (aka unmap) writes |
+
+### zpool_io_size Histogram
+ZFS tracks I/O throughout the ZIO pipeline. The size of each I/O is used
+to create a histogram of the size by I/O type and vdev. For example, a
+4KiB write to mirrored pool will show a 4KiB write to the top-level vdev
+(root) and a 4KiB write to each of the mirror leaf vdevs.
+
+The ZIO pipeline can aggregate I/O operations. For example, a contiguous
+series of writes can be aggregated into a single, larger I/O to the leaf
+vdev. The independent I/O operations reflect the logical operations and
+the aggregated I/O operations reflect the physical operations.
+
+The histogram fields show cumulative values from lowest to highest.
+The largest bucket is tagged "le=+Inf", representing the total count
+of I/Os by type and vdev.
+
+Note: trim I/Os can be larger than 16MiB, but the larger sizes are 
+accounted in the 16MiB bucket.
+
+#### zpool_io_size Histogram Tags
+| label | description |
+|---|---|
+| le | bucket for histogram, I/O size is less than or equal to bucket value in bytes |
+| name | pool name |
+| path | for leaf vdevs, the device path name, otherwise omitted |
+| vdev | vdev name (root = entire pool) |
+
+#### zpool_io_size Histogram Fields
+| field | units | description |
+|---|---|---|
+| sync_read_ind | blocks | independent sync reads |
+| sync_write_ind | blocks | independent sync writes |
+| async_read_ind | blocks | independent async reads |
+| async_write_ind | blocks | independent async writes |
+| scrub_read_ind | blocks | independent scrub/scan reads |
+| trim_write_ind | blocks | independent trim (aka unmap) writes |
+| sync_read_agg | blocks | aggregated sync reads |
+| sync_write_agg | blocks | aggregated sync writes |
+| async_read_agg | blocks | aggregated async reads |
+| async_write_agg | blocks | aggregated async writes |
+| scrub_read_agg | blocks | aggregated scrub/scan reads |
+| trim_write_agg | blocks | aggregated trim (aka unmap) writes |
 
 #### About unsigned integers
 Telegraf v1.6.2 and later support unsigned 64-bit integers which more 
