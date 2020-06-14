@@ -759,7 +759,8 @@ print_stats(zpool_handle_t *zhp, void *data) {
 
 void
 usage(char* name) {
-    fprintf(stderr, "usage: %s [--execd][--no-histograms] [poolname]\n", name);
+    fprintf(stderr, "usage: %s [--execd][--no-histograms]"
+                    "[--sum-histogram-buckets] [poolname]\n", name);
     exit(EXIT_FAILURE);
 }
 
@@ -805,6 +806,7 @@ main(int argc, char *argv[]) {
     }
     while (getline(&line, &len, stdin) != -1) {
         ret = zpool_iter(g_zfs, print_stats, argv[optind]);
+        fflush(stdout);
 	}
     return (ret);
 }
