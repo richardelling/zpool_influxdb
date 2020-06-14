@@ -249,39 +249,6 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 }
 
 /*
- * top-level summary stats are at the pool level
- */
-int
-print_top_level_summary_stats(nvlist_t *nvroot, const char *pool_name) {
-	uint_t c;
-	vdev_stat_t *vs;
-
-	if (nvlist_lookup_uint64_array(nvroot,
-	    ZPOOL_CONFIG_VDEV_STATS, (uint64_t **) &vs, &c) != 0) {
-		return (1);
-	}
-	(void) printf("%s,name=%s,state=%s ", POOL_MEASUREMENT, pool_name,
-	    zpool_state_to_name((vdev_state_t) vs->vs_state,
-	            (vdev_aux_t) vs->vs_aux));
-	(void) printf("alloc="IFMT",free="IFMT",size="IFMT","
-	              "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
-	              "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
-	              "checksum_errors="IFMT",fragmentation="IFMT"",
-	    MASK_UINT64(vs->vs_alloc),
-	    MASK_UINT64(vs->vs_space - vs->vs_alloc),
-	    MASK_UINT64(vs->vs_space),
-	    MASK_UINT64(vs->vs_bytes[ZIO_TYPE_READ]),
-	    MASK_UINT64(vs->vs_read_errors),
-	    MASK_UINT64(vs->vs_ops[ZIO_TYPE_READ]),
-	    MASK_UINT64(vs->vs_bytes[ZIO_TYPE_WRITE]),
-	    MASK_UINT64(vs->vs_write_errors),
-	    MASK_UINT64(vs->vs_ops[ZIO_TYPE_WRITE]),
-	    MASK_UINT64(vs->vs_checksum_errors),
-	    MASK_UINT64(vs->vs_fragmentation));
-	(void) printf(" %lu\n", timestamp);
-	return (0);
-}
-/*
  * get a vdev name that corresponds to the top-level vdev names
  * printed by `zpool status`
  */
@@ -362,6 +329,46 @@ get_vdev_desc(nvlist_t *nvroot, const char *parent_name) {
         free(s);
     }
     return (vdev_desc);
+}
+
+/*
+ * vdev summary stats are a combination of the data shown by
+ * `zpool status` and `zpool list -v`
+ */
+int
+print_summary_stats(nvlist_t *nvroot, const char *pool_name,
+                    const char *parent_name) {
+    uint_t c;
+    vdev_stat_t *vs;
+    char *vdev_desc = NULL;
+    vdev_desc = get_vdev_desc(nvroot, parent_name);
+
+    if (nvlist_lookup_uint64_array(nvroot,
+                                   ZPOOL_CONFIG_VDEV_STATS,
+                                   (uint64_t **) &vs, &c) != 0) {
+        return (1);
+    }
+    (void) printf("%s,name=%s,state=%s,%s ", POOL_MEASUREMENT, pool_name,
+                  zpool_state_to_name((vdev_state_t) vs->vs_state,
+                                      (vdev_aux_t) vs->vs_aux),
+                                      vdev_desc);
+    (void) printf("alloc="IFMT",free="IFMT",size="IFMT","
+                  "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
+                  "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
+                  "checksum_errors="IFMT",fragmentation="IFMT"",
+                  MASK_UINT64(vs->vs_alloc),
+                  MASK_UINT64(vs->vs_space - vs->vs_alloc),
+                  MASK_UINT64(vs->vs_space),
+                  MASK_UINT64(vs->vs_bytes[ZIO_TYPE_READ]),
+                  MASK_UINT64(vs->vs_read_errors),
+                  MASK_UINT64(vs->vs_ops[ZIO_TYPE_READ]),
+                  MASK_UINT64(vs->vs_bytes[ZIO_TYPE_WRITE]),
+                  MASK_UINT64(vs->vs_write_errors),
+                  MASK_UINT64(vs->vs_ops[ZIO_TYPE_WRITE]),
+                  MASK_UINT64(vs->vs_checksum_errors),
+                  MASK_UINT64(vs->vs_fragmentation));
+    (void) printf(" %lu\n", timestamp);
+    return (0);
 }
 
 /*
@@ -731,8 +738,8 @@ print_stats(zpool_handle_t *zhp, void *data) {
 	}
 
 	pool_name = escape_string(zhp->zpool_name);
-	err = print_top_level_summary_stats(nvroot, pool_name);
-
+    err = print_recursive_stats(print_summary_stats, nvroot,
+            pool_name, NULL, 1);
 	/* if any of these return an error, skip the rest */
 	if (err == 0)
 		err = print_scan_status(nvroot, pool_name);
