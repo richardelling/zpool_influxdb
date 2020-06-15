@@ -91,6 +91,7 @@ int execd_mode = 0;
 int no_histograms = 0;
 int sum_histogram_buckets = 0;
 uint64_t timestamp = 0;
+int complained_about_sync = 0;
 
 /*
  * in cases where ZFS is installed, but not the ZFS dev environment, copy in
@@ -163,11 +164,23 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 	    (uint64_t **) &ps, &c);
 
 	/*
-	 * ignore if there are no stats or state is bogus
+	 * ignore if there are no stats
 	 */
-	if (ps == NULL || ps->pss_state >= DSS_NUM_STATES ||
-	    ps->pss_func >= POOL_SCAN_FUNCS)
+	if (ps == NULL)
+	    return (0);
+
+	/*
+	 * return error if state is bogus
+	 */
+	if (ps->pss_state >= DSS_NUM_STATES ||
+	    ps->pss_func >= POOL_SCAN_FUNCS) {
+	    if (complained_about_sync % 1000 == 0) {
+            fprintf(stderr, "error: cannot decode scan stats: ZFS is "
+                            "out of sync with compiled zpool_influxdb");
+            complained_about_sync++;
+        }
 		return (1);
+	}
 
 	switch (ps->pss_func) {
 		case POOL_SCAN_NONE:
@@ -289,10 +302,10 @@ get_vdev_name(nvlist_t *nvroot, const char *parent_name) {
  */
 char *
 get_vdev_desc(nvlist_t *nvroot, const char *parent_name) {
-    static char vdev_desc[256];
+    static char vdev_desc[2 * MAXPATHLEN];
     char *vdev_type = NULL;
     uint64_t vdev_id = 0;
-    char vdev_value[256];
+    char vdev_value[MAXPATHLEN];
     char *vdev_path = NULL;
     char *s, *t;
 
@@ -742,9 +755,6 @@ print_stats(zpool_handle_t *zhp, void *data) {
             pool_name, NULL, 1);
 	/* if any of these return an error, skip the rest */
 	if (err == 0)
-		err = print_scan_status(nvroot, pool_name);
-
-	if (err == 0)
         err = print_top_level_vdev_stats(nvroot, pool_name);
 
 	if (no_histograms == 0) {
@@ -758,7 +768,10 @@ print_stats(zpool_handle_t *zhp, void *data) {
             err = print_recursive_stats(print_queue_stats, nvroot,
                                         pool_name, NULL, 0);
     }
-	free(pool_name);
+    if (err == 0)
+        err = print_scan_status(nvroot, pool_name);
+
+    free(pool_name);
     zpool_close(zhp);
 	return (err);
 }
