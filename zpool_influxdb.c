@@ -242,7 +242,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 	              "pass_examined="IFMT",pause_ts="IFMT",paused_t="IFMT","
 	              "pct_done=%.2f,processed="IFMT",rate="IFMT","
 	              "remaining_t="IFMT",start_ts="IFMT","
-	              "to_examine="IFMT",to_process="IFMT" ",
+	              "to_examine="IFMT",to_process="IFMT",scan_state=%s",
 	    MASK_UINT64(ps->pss_end_time),
 	    MASK_UINT64(ps->pss_errors),
 	    MASK_UINT64(examined),
@@ -255,9 +255,10 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 	    MASK_UINT64(remaining_time),
 	    MASK_UINT64(ps->pss_start_time),
 	    MASK_UINT64(ps->pss_to_examine),
-	    MASK_UINT64(ps->pss_to_process)
+	    MASK_UINT64(ps->pss_to_process),
+        state[ps->pss_state]
 	);
-	(void) printf("%lu\n", timestamp);
+	(void) printf(" %lu\n", timestamp);
 	return (0);
 }
 
@@ -368,7 +369,7 @@ print_summary_stats(nvlist_t *nvroot, const char *pool_name,
     (void) printf("alloc="IFMT",free="IFMT",size="IFMT","
                   "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
                   "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
-                  "checksum_errors="IFMT",fragmentation="IFMT"",
+                  "checksum_errors="IFMT",fragmentation="IFMT",vdev_state=%s",
                   MASK_UINT64(vs->vs_alloc),
                   MASK_UINT64(vs->vs_space - vs->vs_alloc),
                   MASK_UINT64(vs->vs_space),
@@ -379,7 +380,10 @@ print_summary_stats(nvlist_t *nvroot, const char *pool_name,
                   MASK_UINT64(vs->vs_write_errors),
                   MASK_UINT64(vs->vs_ops[ZIO_TYPE_WRITE]),
                   MASK_UINT64(vs->vs_checksum_errors),
-                  MASK_UINT64(vs->vs_fragmentation));
+                  MASK_UINT64(vs->vs_fragmentation),
+                  zpool_state_to_name((vdev_state_t) vs->vs_state,
+                                      (vdev_aux_t) vs->vs_aux)
+                  );
     (void) printf(" %lu\n", timestamp);
     return (0);
 }
