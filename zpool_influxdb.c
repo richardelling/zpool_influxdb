@@ -242,7 +242,7 @@ print_scan_status(nvlist_t *nvroot, const char *pool_name) {
 	              "pass_examined="IFMT",pause_ts="IFMT",paused_t="IFMT","
 	              "pct_done=%.2f,processed="IFMT",rate="IFMT","
 	              "remaining_t="IFMT",start_ts="IFMT","
-	              "to_examine="IFMT",to_process="IFMT",scan_state=%s",
+	              "to_examine="IFMT",to_process="IFMT",scan_state=\"%s\"",
 	    MASK_UINT64(ps->pss_end_time),
 	    MASK_UINT64(ps->pss_errors),
 	    MASK_UINT64(examined),
@@ -369,7 +369,8 @@ print_summary_stats(nvlist_t *nvroot, const char *pool_name,
     (void) printf("alloc="IFMT",free="IFMT",size="IFMT","
                   "read_bytes="IFMT",read_errors="IFMT",read_ops="IFMT","
                   "write_bytes="IFMT",write_errors="IFMT",write_ops="IFMT","
-                  "checksum_errors="IFMT",fragmentation="IFMT",vdev_state=%s",
+                  "checksum_errors="IFMT",fragmentation="IFMT
+                  ",vdev_state=\"%s\"",
                   MASK_UINT64(vs->vs_alloc),
                   MASK_UINT64(vs->vs_space - vs->vs_alloc),
                   MASK_UINT64(vs->vs_space),
