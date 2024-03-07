@@ -16,4 +16,5 @@ include_directories(${ZFS_INSTALL_BASE}/include/libspl ${ZFS_INSTALL_BASE}/inclu
 link_directories(${ZFS_INSTALL_BASE}/lib)
 add_executable(zpool_influxdb zpool_influxdb.c)
 target_link_libraries(zpool_influxdb zfs nvpair)
+set_property(TARGET zpool_influxdb PROPERTY C_STANDARD 99)
 install(TARGETS zpool_influxdb DESTINATION ${ZFS_INSTALL_BASE}/bin)
