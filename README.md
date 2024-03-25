@@ -23,12 +23,12 @@ zpool_influxdb [options] [poolname]
 ```
 If no poolname is specified, then all pools are sampled.
 
-| option | short option | description |
-|---|---|---|
-| --execd | -e | For use with telegraf's `execd` plugin. When [enter] is pressed, the pools are sampled. To exit, use [ctrl+D] |
-| --no-histogram | -n | Do not print histogram information |
-| --sum-histogram-buckets | -s | Sum histogram bucket values |
-| --help | -h | Print a short usage message |
+| option                  | short option | description                                                                                                   |
+|-------------------------|--------------|---------------------------------------------------------------------------------------------------------------|
+| --execd                 | -e           | For use with telegraf's `execd` plugin. When [enter] is pressed, the pools are sampled. To exit, use [ctrl+D] |
+| --no-histogram          | -n           | Do not print histogram information                                                                            |
+| --sum-histogram-buckets | -s           | Sum histogram bucket values                                                                                   |
+| --help                  | -h           | Print a short usage message                                                                                   |
 
 #### Histogram Bucket Values
 The histogram data collected by ZFS is stored as independent bucket values.
@@ -49,14 +49,14 @@ as summed values.
 ## Measurements
 The following measurements are collected:
 
-| measurement | description | zpool equivalent |
-|---|---|---|
-| zpool_stats | general size and data | zpool list |
-| zpool_scan_stats | scrub, rebuild, and resilver statistics (omitted if no scan has been requested) | zpool status |
-| zpool_vdev_stats | per-vdev statistics | zpool iostat -q |
-| zpool_io_size | per-vdev I/O size histogram | zpool iostat -r |
-| zpool_latency | per-vdev I/O latency histogram | zpool iostat -w |
-| zpool_vdev_queue | per-vdev instantaneous queue depth | zpool iostat -q |
+| measurement      | description                                                                     | zpool equivalent |
+|------------------|---------------------------------------------------------------------------------|------------------|
+| zpool_stats      | general size and data                                                           | zpool list       |
+| zpool_scan_stats | scrub, rebuild, and resilver statistics (omitted if no scan has been requested) | zpool status     |
+| zpool_vdev_stats | per-vdev statistics                                                             | zpool iostat -q  |
+| zpool_io_size    | per-vdev I/O size histogram                                                     | zpool iostat -r  |
+| zpool_latency    | per-vdev I/O latency histogram                                                  | zpool iostat -w  |
+| zpool_vdev_queue | per-vdev instantaneous queue depth                                              | zpool iostat -q  |
 
 ### zpool_stats Description
 zpool_stats contains top-level summary statistics for the pool.
@@ -64,24 +64,25 @@ Performance counters measure the I/Os to the pool's devices.
 
 #### zpool_stats Tags
 
-| label | description |
-|---|---|
-| name | pool name |
+| label | description                            |
+|-------|----------------------------------------|
+| name  | pool name                              |
 | state | pool state, as shown by _zpool status_ |
 
 #### zpool_stats Fields
 
-| field | units | description |
-|---|---|---|
-| alloc | bytes | allocated space |
-| free | bytes | unallocated space |
-| size | bytes | total pool size |
-| read_bytes | bytes | bytes read since pool import |
-| read_errors | count | number of read errors |
-| read_ops | count | number of read operations |
-| write_bytes | bytes | bytes written since pool import |
-| write_errors | count | number of write errors |
-| write_ops | count | number of write operations |
+| field        | units  | description                     |
+|--------------|--------|---------------------------------|
+| alloc        | bytes  | allocated space                 |
+| free         | bytes  | unallocated space               |
+| size         | bytes  | total pool size                 |
+| read_bytes   | bytes  | bytes read since pool import    |
+| read_errors  | count  | number of read errors           |
+| read_ops     | count  | number of read operations       |
+| vdev_state   | string | same as tag "state"             |
+| write_bytes  | bytes  | bytes written since pool import |
+| write_errors | count  | number of write errors          |
+| write_ops    | count  | number of write operations      |
 
 ### zpool_scan_stats Description
 Once a pool has been scrubbed, resilvered, or rebuilt, the zpool_scan_stats
@@ -91,28 +92,29 @@ cannot be reported by this collector.
 
 #### zpool_scan_stats Tags
 
-| label | description |
-|---|---|
-| name | pool name |
+| label    | description                                             |
+|----------|---------------------------------------------------------|
+| name     | pool name                                               |
 | function | name of the scan function running or recently completed |
-| state | scan state, as shown by _zpool status_ |
+| state    | scan state, as shown by _zpool status_                  |
 
 #### zpool_scan_stats Fields
 
-| field | units | description |
-|---|---|---|
-| errors | count | number of errors encountered by scan |
-| examined | bytes | total data examined during scan |
-| to_examine | bytes | prediction of total bytes to be scanned |
-| pass_examined | bytes | data examined during current scan pass |
-| processed | bytes | data reconstructed during scan |
-| to_process | bytes | total bytes to be repaired |
-| rate | bytes/sec | examination rate |
-| start_ts | epoch timestamp | start timestamp for scan |
-| pause_ts | epoch timestamp | timestamp for a scan pause request |
-| end_ts | epoch timestamp | completion timestamp for scan |
-| paused_t | seconds | elapsed time while paused |
-| remaining_t | seconds | estimate of time remaining for scan |
+| field         | units           | description                             |
+|---------------|-----------------|-----------------------------------------|
+| errors        | count           | number of errors encountered by scan    |
+| examined      | bytes           | total data examined during scan         |
+| to_examine    | bytes           | prediction of total bytes to be scanned |
+| pass_examined | bytes           | data examined during current scan pass  |
+| processed     | bytes           | data reconstructed during scan          |
+| to_process    | bytes           | total bytes to be repaired              |
+| rate          | bytes/sec       | examination rate                        |
+| start_ts      | epoch timestamp | start timestamp for scan                |
+| pause_ts      | epoch timestamp | timestamp for a scan pause request      |
+| end_ts        | epoch timestamp | completion timestamp for scan           |
+| paused_t      | seconds         | elapsed time while paused               |
+| remaining_t   | seconds         | estimate of time remaining for scan     |
+| scan_state    | string          | same as tag "state"                     |
 
 ### zpool_vdev_stats Description
 The ZFS I/O (ZIO) scheduler uses five queues to schedule I/Os to each vdev.
@@ -127,24 +129,24 @@ the sample time. Therefore, it is not unusual to see all zeroes
 for an idle pool.
 
 #### zpool_vdev_stats Tags
-| label | description |
-|---|---|
-| name | pool name |
-| vdev | vdev name (root = entire pool) |
+| label | description                    |
+|-------|--------------------------------|
+| name  | pool name                      |
+| vdev  | vdev name (root = entire pool) |
 
 #### zpool_vdev_stats Fields
-| field | units | description |
-|---|---|---|
-| sync_r_active_queue | entries | synchronous read active queue depth |
-| sync_w_active_queue | entries | synchronous write active queue depth |
-| async_r_active_queue | entries | asynchronous read active queue depth |
-| async_w_active_queue | entries | asynchronous write active queue depth |
-| async_scrub_active_queue | entries | asynchronous scrub active queue depth |
-| sync_r_pend_queue | entries | synchronous read pending queue depth |
-| sync_w_pend_queue | entries | synchronous write pending queue depth |
-| async_r_pend_queue | entries | asynchronous read pending queue depth |
-| async_w_pend_queue | entries | asynchronous write pending queue depth |
-| async_scrub_pend_queue | entries | asynchronous scrub pending queue depth |
+| field                    | units   | description                            |
+|--------------------------|---------|----------------------------------------|
+| sync_r_active_queue      | entries | synchronous read active queue depth    |
+| sync_w_active_queue      | entries | synchronous write active queue depth   |
+| async_r_active_queue     | entries | asynchronous read active queue depth   |
+| async_w_active_queue     | entries | asynchronous write active queue depth  |
+| async_scrub_active_queue | entries | asynchronous scrub active queue depth  |
+| sync_r_pend_queue        | entries | synchronous read pending queue depth   |
+| sync_w_pend_queue        | entries | synchronous write pending queue depth  |
+| async_r_pend_queue       | entries | asynchronous read pending queue depth  |
+| async_w_pend_queue       | entries | asynchronous write pending queue depth |
+| async_scrub_pend_queue   | entries | asynchronous scrub pending queue depth |
 
 ### zpool_latency Histogram
 ZFS tracks the latency of each I/O in the ZIO pipeline. This latency can
@@ -156,26 +158,26 @@ The largest bucket is tagged "le=+Inf", representing the total count
 of I/Os by type and vdev.
 
 #### zpool_latency Histogram Tags
-| label | description |
-|---|---|
-| le | bucket for histogram, latency is less than or equal to bucket value in seconds |
-| name | pool name |
-| path | for leaf vdevs, the device path name, otherwise omitted |
-| vdev | vdev name (root = entire pool) |
+| label | description                                                                    |
+|-------|--------------------------------------------------------------------------------|
+| le    | bucket for histogram, latency is less than or equal to bucket value in seconds |
+| name  | pool name                                                                      |
+| path  | for leaf vdevs, the device path name, otherwise omitted                        |
+| vdev  | vdev name (root = entire pool)                                                 |
 
 #### zpool_latency Histogram Fields
-| field | units | description |
-|---|---|---|
-| total_read | operations | read operations of all types |
+| field       | units      | description                   |
+|-------------|------------|-------------------------------|
+| total_read  | operations | read operations of all types  |
 | total_write | operations | write operations of all types |
-| disk_read | operations | disk read operations |
-| disk_write | operations | disk write operations |
-| sync_read | operations | ZIO sync reads |
-| sync_write | operations | ZIO sync writes |
-| async_read | operations | ZIO async reads|
-| async_write | operations | ZIO async writes |
-| scrub | operations | ZIO scrub/scan reads |
-| trim | operations | ZIO trim (aka unmap) writes |
+| disk_read   | operations | disk read operations          |
+| disk_write  | operations | disk write operations         |
+| sync_read   | operations | ZIO sync reads                |
+| sync_write  | operations | ZIO sync writes               |
+| async_read  | operations | ZIO async reads               |
+| async_write | operations | ZIO async writes              |
+| scrub       | operations | ZIO scrub/scan reads          |
+| trim        | operations | ZIO trim (aka unmap) writes   |
 
 ### zpool_io_size Histogram
 ZFS tracks I/O throughout the ZIO pipeline. The size of each I/O is used
@@ -196,28 +198,28 @@ Note: trim I/Os can be larger than 16MiB, but the larger sizes are
 accounted in the 16MiB bucket.
 
 #### zpool_io_size Histogram Tags
-| label | description |
-|---|---|
-| le | bucket for histogram, I/O size is less than or equal to bucket value in bytes |
-| name | pool name |
-| path | for leaf vdevs, the device path name, otherwise omitted |
-| vdev | vdev name (root = entire pool) |
+| label | description                                                                   |
+|-------|-------------------------------------------------------------------------------|
+| le    | bucket for histogram, I/O size is less than or equal to bucket value in bytes |
+| name  | pool name                                                                     |
+| path  | for leaf vdevs, the device path name, otherwise omitted                       |
+| vdev  | vdev name (root = entire pool)                                                |
 
 #### zpool_io_size Histogram Fields
-| field | units | description |
-|---|---|---|
-| sync_read_ind | blocks | independent sync reads |
-| sync_write_ind | blocks | independent sync writes |
-| async_read_ind | blocks | independent async reads |
-| async_write_ind | blocks | independent async writes |
-| scrub_read_ind | blocks | independent scrub/scan reads |
-| trim_write_ind | blocks | independent trim (aka unmap) writes |
-| sync_read_agg | blocks | aggregated sync reads |
-| sync_write_agg | blocks | aggregated sync writes |
-| async_read_agg | blocks | aggregated async reads |
-| async_write_agg | blocks | aggregated async writes |
-| scrub_read_agg | blocks | aggregated scrub/scan reads |
-| trim_write_agg | blocks | aggregated trim (aka unmap) writes |
+| field           | units  | description                         |
+|-----------------|--------|-------------------------------------|
+| sync_read_ind   | blocks | independent sync reads              |
+| sync_write_ind  | blocks | independent sync writes             |
+| async_read_ind  | blocks | independent async reads             |
+| async_write_ind | blocks | independent async writes            |
+| scrub_read_ind  | blocks | independent scrub/scan reads        |
+| trim_write_ind  | blocks | independent trim (aka unmap) writes |
+| sync_read_agg   | blocks | aggregated sync reads               |
+| sync_write_agg  | blocks | aggregated sync writes              |
+| async_read_agg  | blocks | aggregated async reads              |
+| async_write_agg | blocks | aggregated async writes             |
+| scrub_read_agg  | blocks | aggregated scrub/scan reads         |
+| trim_write_agg  | blocks | aggregated trim (aka unmap) writes  |
 
 #### About unsigned integers
 Telegraf v1.6.2 and later support unsigned 64-bit integers which more 
